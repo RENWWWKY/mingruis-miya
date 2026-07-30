@@ -190,16 +190,17 @@
     return { contact: contact, profile: null, chat: chat, settings: settings };
   }
 
+  /** 赛事一律用角色真名，不用备注名 */
   function displayName(contact) {
     if (!contact) return '未命名';
-    return String(contact.remarkName || contact.name || '未命名').trim();
+    return String(contact.name || '未命名').trim() || '未命名';
   }
 
   function buildCharacterBlock(contact) {
     var cts = global.miyaContactsStore;
     var parts = [];
     var roleId = String((contact && contact.characterId) || (contact && contact.chronicleId) || '').trim();
-    parts.push('【角色显示名】' + displayName(contact));
+    parts.push('【角色名】' + displayName(contact));
     parts.push('【结果字段用 contactId｜正文禁止出现】' + String(contact && contact.id || ''));
     if (roleId && cts && typeof cts.renderChronicleBlock === 'function') {
       var ch = String(cts.renderChronicleBlock(roleId) || '').trim();

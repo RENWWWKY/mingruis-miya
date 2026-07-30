@@ -110,9 +110,15 @@
     return Promise.resolve(chronicleAvatar(contact) || '');
   }
 
+  /** 你说我猜一律用角色真名，不用备注名 */
+  function characterTrueName(contact) {
+    if (!contact) return '未命名';
+    return String(contact.name || '未命名').trim() || '未命名';
+  }
+
   function avatarHtml(contact, cls, dataAttr) {
     var url = resolveAvatarSync(contact);
-    var name = String((contact && (contact.remarkName || contact.name)) || '?');
+    var name = characterTrueName(contact);
     var attr = dataAttr ? ' ' + dataAttr : '';
     if (url) {
       return '<img class="' + cls + '" src="' + esc(url) + '" alt=""' + attr + '>';
@@ -202,6 +208,26 @@
     return state.sessionId ? store().findSession(state.sessionId) : null;
   }
 
+  /** 把对局里角色显示名刷成真名（兼容旧局存的备注名） */
+  function syncSessionCharTrueNames(session) {
+    if (!session || !Array.isArray(session.players)) return session;
+    var changed = false;
+    session.players.forEach(function (p) {
+      if (!p || p.kind !== 'char' || !p.contactId) return;
+      var c = listContacts().find(function (x) { return String(x.id) === String(p.contactId); });
+      if (!c) return;
+      var trueName = characterTrueName(c);
+      if (p.name !== trueName) {
+        p.name = trueName;
+        changed = true;
+      }
+    });
+    if (changed && session.id) {
+      store().updateSession(session.id, { players: session.players });
+    }
+    return session;
+  }
+
   function selectedCharCount() {
     return Object.keys(state.selected).filter(function (k) { return state.selected[k]; }).length;
   }
@@ -223,7 +249,7 @@
       players.push({
         id: 'char:' + c.id,
         kind: 'char',
-        name: String(c.remarkName || c.name || '未命名').trim(),
+        name: characterTrueName(c),
         contactId: c.id,
         profileId: ''
       });
@@ -433,7 +459,7 @@
         var on = !!state.selected[c.id];
         html += '<button type="button" class="sg-pick' + (on ? ' is-on' : '') + '" data-sg-pick="' + esc(c.id) + '">';
         html += avatarHtml(c, 'sg-pick__av', 'data-sg-ava-contact="' + esc(c.id) + '"');
-        html += '<span class="sg-pick__name">' + esc(c.remarkName || c.name || '') + '</span>';
+        html += '<span class="sg-pick__name">' + esc(characterTrueName(c)) + '</span>';
         html += '</button>';
       });
       html += '</div>';
@@ -870,7 +896,7 @@
   }
 
   function renderPlay() {
-    var session = currentSession();
+    var session = syncSessionCharTrueNames(currentSession());
     var host = $('sg-play-scroll');
     if (!host || !session) return;
     var round = currentRound(session);
@@ -1081,7 +1107,7 @@
   }
 
   function renderResult() {
-    var session = currentSession();
+    var session = syncSessionCharTrueNames(currentSession());
     var host = $('sg-result-scroll');
     if (!host || !session) return;
     var ranked = rankedPlayers(session);
@@ -1187,7 +1213,7 @@
   }
 
   function renderSend() {
-    var session = currentSession();
+    var session = syncSessionCharTrueNames(currentSession());
     var host = $('sg-send-scroll');
     if (!session || !host) return;
     var html = '';
@@ -1212,11 +1238,59 @@
     return u;
   }
 
-  function buildSayGuessRecordPayload(session) {
-    var digest = store().buildContextDigest(session);
-    var profile = bridge().resolveProfile(session.profileId);
-    var profileAvatar = slimAvatarForStore(resolveProfileAvatarUrlSync(profile));
+  /** 发送聊天记录前：角色名一律换成真名（含对局里残留的备注名） */
+  function sessionWithTrueNames(session) {
+    if (!session) return session;
+    var nameMap = {};
     var players = (session.players || []).map(function (p) {
+      if (!p) return p;
+      if (p.kind !== 'char') return p;
+      var c = listContacts().find(function (x) { return String(x.id) === String(p.contactId); });
+      var trueName = c ? characterTrueName(c) : String(p.name || '未命名').trim();
+      var old = String(p.name || '').trim();
+      if (old) nameMap[old] = trueName;
+      if (c && c.remarkName) {
+        var remark = String(c.remarkName).trim();
+        if (remark) nameMap[remark] = trueName;
+      }
+      if (c && c.name) nameMap[String(c.name).trim()] = trueName;
+      return Object.assign({}, p, { name: trueName });
+    });
+    function mapName(n) {
+      var s = String(n || '').trim();
+      return (s && nameMap[s]) || s;
+    }
+    function mapLine(ln) {
+      if (!ln || typeof ln !== 'object') return ln;
+      return Object.assign({}, ln, { name: mapName(ln.name) });
+    }
+    var rounds = (session.rounds || []).map(function (r) {
+      if (!r) return r;
+      return Object.assign({}, r, {
+        dialogue: Array.isArray(r.dialogue) ? r.dialogue.map(mapLine) : [],
+        review: Array.isArray(r.review) ? r.review.map(mapLine) : [],
+        guesses: Array.isArray(r.guesses) ? r.guesses.slice() : []
+      });
+    });
+    var reactions = Array.isArray(session.reactions)
+      ? session.reactions.map(function (rx) {
+          if (!rx || typeof rx !== 'object') return rx;
+          return Object.assign({}, rx, { name: mapName(rx.name) });
+        })
+      : [];
+    return Object.assign({}, session, {
+      players: players,
+      rounds: rounds,
+      reactions: reactions
+    });
+  }
+
+  function buildSayGuessRecordPayload(session) {
+    var named = sessionWithTrueNames(session);
+    var digest = store().buildContextDigest(named);
+    var profile = bridge().resolveProfile(named.profileId);
+    var profileAvatar = slimAvatarForStore(resolveProfileAvatarUrlSync(profile));
+    var players = (named.players || []).map(function (p) {
       if (!p) return null;
       var avatar = '';
       if (p.kind === 'char') {
@@ -1231,29 +1305,29 @@
         contactId: p.contactId || '',
         name: p.name || '',
         avatar: avatar,
-        score: (session.scores && session.scores[p.id]) || 0
+        score: (named.scores && named.scores[p.id]) || 0
       };
     }).filter(Boolean);
-    var ranked = rankedPlayers(session).map(function (p, i) {
-      return { playerId: p.id, name: p.name, rank: i + 1, score: (session.scores && session.scores[p.id]) || 0 };
+    var ranked = rankedPlayers(named).map(function (p, i) {
+      return { playerId: p.id, name: p.name, rank: i + 1, score: (named.scores && named.scores[p.id]) || 0 };
     });
     return {
       role: 'user',
       type: 'sayguess_record',
       content: digest,
       sayguessRecord: {
-        sessionId: session.id,
-        mode: session.mode,
-        totalRounds: session.totalRounds,
-        bankName: session.bankName || '',
-        profileId: session.profileId || '',
-        profileName: session.profileName || '',
+        sessionId: named.id,
+        mode: named.mode,
+        totalRounds: named.totalRounds,
+        bankName: named.bankName || '',
+        profileId: named.profileId || '',
+        profileName: named.profileName || '',
         profileAvatar: profileAvatar,
         players: players,
-        scores: session.scores || {},
+        scores: named.scores || {},
         rankings: ranked,
-        prizes: store().normalizePrizes(session.prizes),
-        rounds: (session.rounds || []).map(function (r) {
+        prizes: store().normalizePrizes(named.prizes),
+        rounds: (named.rounds || []).map(function (r) {
           return {
             index: r.index,
             word: r.word,
@@ -1264,8 +1338,8 @@
             guesses: Array.isArray(r.guesses) ? r.guesses : []
           };
         }),
-        reactions: Array.isArray(session.reactions) ? session.reactions : [],
-        createdAt: session.createdAt || Date.now()
+        reactions: Array.isArray(named.reactions) ? named.reactions : [],
+        createdAt: named.createdAt || Date.now()
       }
     };
   }

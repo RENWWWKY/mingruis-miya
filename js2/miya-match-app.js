@@ -137,9 +137,15 @@
     return '';
   }
 
+  /** 赛事一律用角色真名，不用备注名 */
+  function characterTrueName(contact) {
+    if (!contact) return '未命名';
+    return String(contact.name || '未命名').trim() || '未命名';
+  }
+
   function avatarHtml(contact, cls) {
     var url = resolveAvatarSync(contact);
-    var name = contact ? String(contact.remarkName || contact.name || '?') : '?';
+    var name = characterTrueName(contact);
     if (url) {
       return '<img class="' + cls + '" src="' + esc(url) + '" alt="">';
     }
@@ -293,6 +299,73 @@
 
   function currentSession() {
     return store().findSession(state.sessionId);
+  }
+
+  /** 把场次里角色显示名刷成真名（兼容旧场次存的备注名） */
+  function syncSessionCharTrueNames(session) {
+    if (!session || !Array.isArray(session.participants)) return session;
+    var cs = chatStore();
+    var changed = false;
+    var nameMap = {};
+    session.participants.forEach(function (p) {
+      if (!p || !p.contactId) return;
+      var c = cs && cs.findContact ? cs.findContact(p.contactId) : null;
+      if (!c) return;
+      var trueName = characterTrueName(c);
+      var old = String(p.name || '').trim();
+      if (old && old !== trueName) nameMap[old] = trueName;
+      if (c.remarkName) {
+        var remark = String(c.remarkName).trim();
+        if (remark) nameMap[remark] = trueName;
+      }
+      if (p.name !== trueName) {
+        p.name = trueName;
+        changed = true;
+      }
+    });
+    if (session.proposerContactId) {
+      var pc = cs && cs.findContact ? cs.findContact(session.proposerContactId) : null;
+      if (pc) {
+        var pn = characterTrueName(pc);
+        if (session.proposerName !== pn) {
+          session.proposerName = pn;
+          changed = true;
+        }
+      }
+    }
+    if (Array.isArray(session.reactions) && Object.keys(nameMap).length) {
+      session.reactions.forEach(function (rx) {
+        if (!rx) return;
+        var n = String(rx.name || '').trim();
+        if (n && nameMap[n]) {
+          rx.name = nameMap[n];
+          changed = true;
+        }
+      });
+    }
+    if (changed && session.id) {
+      store().updateSession(session.id, {
+        participants: session.participants,
+        proposerName: session.proposerName,
+        reactions: session.reactions,
+        contextDigest: ''
+      });
+    }
+    return session;
+  }
+
+  /** 发送聊天记录前：角色名一律换成真名 */
+  function sessionWithTrueNames(session) {
+    if (!session) return session;
+    var named = syncSessionCharTrueNames(Object.assign({}, session, {
+      participants: (session.participants || []).map(function (p) {
+        return p ? Object.assign({}, p) : p;
+      }),
+      reactions: Array.isArray(session.reactions)
+        ? session.reactions.map(function (rx) { return rx ? Object.assign({}, rx) : rx; })
+        : session.reactions
+    }));
+    return named;
   }
 
   function formatTime(ts) {
@@ -696,7 +769,7 @@
         return (
           '<button type="button" class="mt-pick" data-mt-char-propose="' + esc(c.id) + '">' +
             avatarHtml(c, 'mt-pick__av') +
-            '<span class="mt-pick__name">' + esc(c.remarkName || c.name || '') + '</span>' +
+            '<span class="mt-pick__name">' + esc(characterTrueName(c)) + '</span>' +
           '</button>'
         );
       }).join('');
@@ -711,7 +784,7 @@
       toast('找不到该角色');
       return;
     }
-    setOverlay(true, '角色构思中…', (contact.remarkName || contact.name || '角色') + ' 正在提出想比的比赛');
+    setOverlay(true, '角色构思中…', characterTrueName(contact) + ' 正在提出想比的比赛');
     bridge().proposeMatch(contact).then(function (proposal) {
       setOverlay(false);
       openCustomEditFromProposal(proposal);
@@ -730,7 +803,7 @@
       if (!c) return;
       out.push({
         contactId: c.id,
-        name: String(c.remarkName || c.name || '未命名').trim(),
+        name: characterTrueName(c),
         avatar: c.avatarUrl || c.avatar || '',
         team: state.mode === 'team' ? (state.teams[id] || '') : undefined
       });
@@ -781,7 +854,7 @@
           html += '<span class="mt-pick__team">' + esc(team) + '</span>';
         }
         html += avatarHtml(c, 'mt-pick__av');
-        html += '<span class="mt-pick__name">' + esc(c.remarkName || c.name || '') + '</span>';
+        html += '<span class="mt-pick__name">' + esc(characterTrueName(c)) + '</span>';
         html += '</button>';
       });
       html += '</div>';
@@ -901,6 +974,7 @@
       });
       var s = currentSession();
       if (s) {
+        syncSessionCharTrueNames(s);
         store().updateSession(s.id, { contextDigest: store().buildContextDigest(s) });
       }
       setOverlay(false);
@@ -920,7 +994,7 @@
   }
 
   function renderResult() {
-    var session = currentSession();
+    var session = syncSessionCharTrueNames(currentSession());
     var host = $('mt-result-scroll');
     var dock = $('mt-result-dock');
     var title = $('mt-result-title');
@@ -1105,7 +1179,7 @@
   }
 
   function renderSend() {
-    var session = currentSession();
+    var session = syncSessionCharTrueNames(currentSession());
     var host = $('mt-send-scroll');
     if (!session || !host) return;
     var html = '<p class="mt-hint">将完整比赛记录以卡片形式发到所选角色的聊天（进入上下文）。</p>';
@@ -1126,17 +1200,20 @@
   }
 
   function buildMatchRecordPayload(session) {
-    var digest = session.contextDigest || store().buildContextDigest(session);
-    var profile = findSessionProfile(session);
+    var named = sessionWithTrueNames(session);
+    var digest = store().buildContextDigest(named);
+    var profile = findSessionProfile(named);
     var profileAvatar = slimAvatarForStore(
-      resolveProfileAvatarUrlSync(profile) || String(session.profileAvatar || '').trim()
+      resolveProfileAvatarUrlSync(profile) || String(named.profileAvatar || '').trim()
     );
-    var participants = (session.participants || []).map(function (p) {
+    var participants = (named.participants || []).map(function (p) {
       if (!p || typeof p !== 'object') return null;
+      var cs = chatStore();
+      var c = cs && cs.findContact ? cs.findContact(p.contactId) : null;
       return {
         contactId: String(p.contactId || '').trim(),
-        name: String(p.name || '').trim(),
-        avatar: slimAvatarForStore(p.avatar || p.avatarUrl || ''),
+        name: c ? characterTrueName(c) : String(p.name || '').trim(),
+        avatar: slimAvatarForStore((c && (c.avatarUrl || c.avatar)) || p.avatar || p.avatarUrl || ''),
         team: p.team === 'B' ? 'B' : p.team === 'A' ? 'A' : undefined
       };
     }).filter(Boolean);
@@ -1145,23 +1222,23 @@
       type: 'match_record',
       content: digest,
       matchRecord: {
-        sessionId: session.id,
-        eventName: session.eventName,
-        eventItemName: session.eventItemName,
-        mode: session.mode,
-        highlight: (session.result && session.result.highlight) || '',
-        narrative: (session.result && session.result.narrative) || '',
-        beats: (session.result && session.result.beats) || [],
-        rankings: (session.result && session.result.rankings) || null,
-        winnerTeam: (session.result && session.result.winnerTeam) || '',
-        mvpContactId: (session.result && session.result.mvpContactId) || '',
-        prizes: session.prizes || {},
+        sessionId: named.id,
+        eventName: named.eventName,
+        eventItemName: named.eventItemName,
+        mode: named.mode,
+        highlight: (named.result && named.result.highlight) || '',
+        narrative: (named.result && named.result.narrative) || '',
+        beats: (named.result && named.result.beats) || [],
+        rankings: (named.result && named.result.rankings) || null,
+        winnerTeam: (named.result && named.result.winnerTeam) || '',
+        mvpContactId: (named.result && named.result.mvpContactId) || '',
+        prizes: named.prizes || {},
         participants: participants,
-        reactions: session.reactions || [],
-        profileId: session.profileId || (profile && profile.id) || '',
-        profileName: session.profileName || (profile && profile.name) || '',
+        reactions: named.reactions || [],
+        profileId: named.profileId || (profile && profile.id) || '',
+        profileName: named.profileName || (profile && profile.name) || '',
         profileAvatar: profileAvatar,
-        createdAt: session.createdAt
+        createdAt: named.createdAt
       }
     };
   }

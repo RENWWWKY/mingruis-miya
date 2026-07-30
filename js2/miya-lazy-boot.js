@@ -164,8 +164,8 @@
       js: [
         'js2/miya-forum-bridge.js?v=17',
         'js2/miya-match-store.js?v=3',
-        'js2/miya-match-bridge.js?v=4',
-        'js2/miya-match-app.js?v=5'
+        'js2/miya-match-bridge.js?v=5',
+        'js2/miya-match-app.js?v=6'
       ]
     },
     funUi: {
@@ -173,8 +173,8 @@
       js: [
         'js2/miya-forum-bridge.js?v=17',
         'js2/miya-fun-sayguess-store.js?v=3',
-        'js2/miya-fun-sayguess-bridge.js?v=5',
-        'js2/miya-fun-sayguess-app.js?v=8',
+        'js2/miya-fun-sayguess-bridge.js?v=6',
+        'js2/miya-fun-sayguess-app.js?v=9',
         'js2/miya-fun-app.js?v=2'
       ]
     }

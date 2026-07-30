@@ -111,9 +111,10 @@
     return { contact: contact, profile: profile, chat: chat, settings: settings };
   }
 
+  /** 你说我猜一律用角色真名，不用备注名 */
   function displayName(contact) {
     if (!contact) return '未命名';
-    return String(contact.remarkName || contact.name || '未命名').trim();
+    return String(contact.name || '未命名').trim() || '未命名';
   }
 
   function buildCharacterBlock(contact) {
