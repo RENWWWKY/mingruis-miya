@@ -1004,6 +1004,16 @@
         return !preset || preset.showThinking !== false;
     }
 
+    function resolveTextDecor() {
+        if (!ui.chatId) return true;
+        var st = chatStore();
+        if (!st) return true;
+        var chat = st.findChat(ui.chatId);
+        if (!chat) return true;
+        var preset = apStore().resolvePresetForContact(chat.contactId);
+        return !preset || preset.textDecor !== false;
+    }
+
     function thinkingToggleHtml(thinking, extraAttrs) {
         if (!resolveShowThinking()) return '';
         var t = String(thinking || '').trim();
@@ -1122,7 +1132,15 @@
         );
     }
 
+    function plainParagraphHtml(text, role) {
+        var t = String(text || '').trim();
+        if (!t) return '';
+        var cls = role === 'user' ? 'xw-txt--mine' : 'xw-txt--theirs';
+        return '<p class="xw-txt ' + cls + '">' + esc(t).replace(/\n/g, '<br>') + '</p>';
+    }
+
     function decorateParagraph(text, role) {
+        if (!resolveTextDecor()) return plainParagraphHtml(text, role);
         var decor = global.MiyaOfflineTextDecor;
         if (decor && typeof decor.decorateParagraph === 'function') {
             return decor.decorateParagraph(text, role);
@@ -1148,6 +1166,15 @@
         if (m.renderAsHtml) return buildHtmlPanelHtml(m.htmlRaw || m.content);
         var paras = splitStoryParagraphs(m.content);
         if (!paras.length) return '';
+        if (!resolveTextDecor()) {
+            var plain = paras
+                .map(function (para) {
+                    return esc(String(para || '').trim()).replace(/\n/g, '<br>');
+                })
+                .filter(Boolean)
+                .join('<br><br>');
+            return plain ? '<div class="xw-chat__text">' + plain + '</div>' : '';
+        }
         var decor = global.MiyaOfflineTextDecor;
         if (decor && typeof decor.decorateJournalBody === 'function') {
             return decor.decorateJournalBody(paras);
@@ -1409,7 +1436,9 @@
             ':' +
             (lastSum
                 ? String(lastSum.id || '') + '|' + String(lastSum.content || '').length
-                : '')
+                : '') +
+            ':td' +
+            (resolveTextDecor() ? '1' : '0')
         );
     }
 
@@ -2453,6 +2482,13 @@ function renderWriter() {
                 ? '<option value="true" selected>开</option><option value="false">关</option>'
                 : '<option value="true">开</option><option value="false" selected>关</option>') +
             '</select></div>' +
+            '<div class="xw-field xw-field--panel"><label>正文美化</label>' +
+            '<select id="mol-text-decor">' +
+            (preset.textDecor !== false
+                ? '<option value="true" selected>开</option><option value="false">关</option>'
+                : '<option value="true">开</option><option value="false" selected>关</option>') +
+            '</select>' +
+            '<p class="xw-field__hint">关则引号、括号等恢复为普通正文；按当前角色单独保存</p></div>' +
             '<div class="xw-field xw-field--panel"><label>状态栏悬浮球</label>' +
             '<select id="mol-status-fab">' +
             (function () {
@@ -2567,7 +2603,8 @@ function renderWriter() {
                 userPerson: pov.userPerson,
                 summaryPrompt: defaultSummaryPrompt(),
                 showThinking: $('mol-show-thinking').value !== 'false',
-                enterToSend: $('mol-enter-send').value !== 'false'
+                enterToSend: $('mol-enter-send').value !== 'false',
+                textDecor: $('mol-text-decor').value !== 'false'
             };
         }
 
@@ -2598,6 +2635,9 @@ function renderWriter() {
             if ($('mol-enter-send')) {
                 $('mol-enter-send').value = params.enterToSend !== false ? 'true' : 'false';
             }
+            if ($('mol-text-decor')) {
+                $('mol-text-decor').value = params.textDecor !== false ? 'true' : 'false';
+            }
         }
 
         function refreshPresetSelect(selectedId) {
@@ -2622,6 +2662,10 @@ function renderWriter() {
                 apStore().saveStatusBar({ enabled: statusSel.value !== 'false' });
             }
             syncStatusFab();
+            ui.stableStoryKey = '';
+            try {
+                patchStoryBody();
+            } catch (e) {}
             return true;
         }
 

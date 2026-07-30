@@ -43,6 +43,7 @@
                 '以时间线客观总结本段线下长剧情，区分双方，保留关键情节、情绪转折与约定；100–280字，不要复述修辞。',
             worldbookBindings: [],
             showThinking: true,
+            textDecor: true,
             updatedAt: Date.now()
         };
     }
@@ -198,6 +199,7 @@
             summaryPrompt: String(raw.summaryPrompt || '').trim(),
             showThinking: raw.showThinking !== false,
             enterToSend: raw.enterToSend !== false,
+            textDecor: raw.textDecor !== false,
             updatedAt: Number(raw.updatedAt) || Date.now()
         };
     }
@@ -292,6 +294,7 @@
             worldbookBindings: normalizeBindings(raw.worldbookBindings),
             showThinking: raw.showThinking !== false,
             enterToSend: raw.enterToSend !== false,
+            textDecor: raw.textDecor !== false,
             updatedAt: Number(raw.updatedAt) || Date.now()
         };
         return migrateLegacyPresetFields(mergeBuiltinDefaults(row));

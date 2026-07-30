@@ -2008,6 +2008,73 @@
                 createdAt: Number(mr.createdAt) || 0
             };
         }
+        if (raw && raw.sayguessRecord && typeof raw.sayguessRecord === 'object') {
+            var sg = raw.sayguessRecord;
+            out.type = 'sayguess_record';
+            out.sayguessRecord = {
+                sessionId: String(sg.sessionId || '').trim(),
+                mode: sg.mode === 'other_lead' ? 'other_lead' : 'user_lead',
+                totalRounds: Math.max(0, Number(sg.totalRounds) || 0),
+                bankName: String(sg.bankName || '').trim(),
+                profileId: String(sg.profileId || '').trim(),
+                profileName: String(sg.profileName || '').trim(),
+                profileAvatar: String(sg.profileAvatar || '').trim(),
+                players: Array.isArray(sg.players)
+                    ? sg.players.map(function (p) {
+                        if (!p || typeof p !== 'object') return null;
+                        return {
+                            id: String(p.id || '').trim(),
+                            kind: p.kind === 'user' ? 'user' : 'char',
+                            contactId: String(p.contactId || '').trim(),
+                            name: String(p.name || '').trim(),
+                            avatar: String(p.avatar || '').trim(),
+                            score: Math.max(0, Number(p.score) || 0)
+                        };
+                    }).filter(Boolean)
+                    : [],
+                scores: sg.scores && typeof sg.scores === 'object' ? sg.scores : {},
+                rankings: Array.isArray(sg.rankings)
+                    ? sg.rankings.map(function (r) {
+                        if (!r || typeof r !== 'object') return null;
+                        return {
+                            playerId: String(r.playerId || '').trim(),
+                            name: String(r.name || '').trim(),
+                            rank: Math.max(1, Number(r.rank) || 1),
+                            score: Math.max(0, Number(r.score) || 0)
+                        };
+                    }).filter(Boolean)
+                    : [],
+                prizes: sg.prizes && typeof sg.prizes === 'object' ? sg.prizes : {},
+                rounds: Array.isArray(sg.rounds)
+                    ? sg.rounds.map(function (r) {
+                        if (!r || typeof r !== 'object') return null;
+                        return {
+                            index: Number(r.index) || 0,
+                            word: String(r.word || '').trim(),
+                            describerId: String(r.describerId || '').trim(),
+                            description: String(r.description || ''),
+                            dialogue: Array.isArray(r.dialogue) ? r.dialogue : [],
+                            review: Array.isArray(r.review) ? r.review : [],
+                            guesses: Array.isArray(r.guesses) ? r.guesses : []
+                        };
+                    }).filter(Boolean)
+                    : [],
+                reactions: Array.isArray(sg.reactions)
+                    ? sg.reactions.map(function (rx) {
+                        if (!rx || typeof rx !== 'object') return null;
+                        var text = String(rx.text || '').trim();
+                        if (!text) return null;
+                        return {
+                            contactId: String(rx.contactId || '').trim(),
+                            playerId: String(rx.playerId || '').trim(),
+                            name: String(rx.name || '').trim(),
+                            text: text
+                        };
+                    }).filter(Boolean)
+                    : [],
+                createdAt: Number(sg.createdAt) || 0
+            };
+        }
         if (raw && raw.listenTogetherCapsule && typeof raw.listenTogetherCapsule === 'object') {
             out.listenTogetherCapsule = {
                 sessionId: String(raw.listenTogetherCapsule.sessionId || raw.sessionId || ''),
@@ -2252,6 +2319,12 @@
             return '[赛事记录] ' + mrPrev;
         }
         if (m.type === 'match_record') return '[赛事记录]';
+        if (m.type === 'sayguess_record' && m.sayguessRecord) {
+            var sgPrev = '你说我猜';
+            if (m.sayguessRecord.bankName) sgPrev += ' · ' + m.sayguessRecord.bankName;
+            return '[你说我猜] ' + sgPrev;
+        }
+        if (m.type === 'sayguess_record') return '[你说我猜]';
         if (m.type === 'voice') return '[语音]' + (m.voiceText || stripApiTimelinePrefix(m.content) || '');
         if (m.type === 'html' || m.renderAsHtml) return '[HTML]';
         if (m.type === 'karaoke') {
@@ -2285,6 +2358,7 @@
         if (m.type === 'group_red_packet' && m.groupRedPacket) return true;
         if (m.type === 'love_poem' && m.lovePoem) return true;
         if (m.type === 'match_record' && m.matchRecord) return true;
+        if (m.type === 'sayguess_record' && m.sayguessRecord) return true;
         if (m.type === 'voice') return !!(m.voiceText || m.content || m.voiceAudioIdbKey);
         if (m.type === 'image' || m.imageDataKey) return true;
         if (m.type === 'sticker') return !!(m.stickerBlobId || m.stickerUrl || m.stickerName || m.content);
@@ -4262,6 +4336,8 @@
                     entry.type === 'love_poem' ||
                     entry.type === 'match_record' ||
                     (entry.matchRecord && typeof entry.matchRecord === 'object') ||
+                    entry.type === 'sayguess_record' ||
+                    (entry.sayguessRecord && typeof entry.sayguessRecord === 'object') ||
                     (entry.type === 'html' && (entry.htmlRaw || entry.content)) ||
                     (entry.type === 'karaoke' && entry.karaokeIdbKey) ||
                     (entry.tajiePostShare && typeof entry.tajiePostShare === 'object') ||

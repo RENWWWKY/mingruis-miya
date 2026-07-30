@@ -1,5 +1,5 @@
 /**
- * miya-diary-app.js — 日记 · 手帐本
+ * miya-diary-app.js — 日记
  */
 (function (global) {
   'use strict';
@@ -19,7 +19,8 @@
 
   var toastTimer = 0;
   var LAYOUTS = ['a', 'b', 'c'];
-  var STICKERS = ['☁', '✿', '♡', '☕', '✦', '🌙', '🍃', '★'];
+  var WEEKDAY_CN = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+  var MONTH_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
   function store() { return global.miyaDiaryStore || null; }
   function bridge() { return global.miyaDiaryBridge || null; }
@@ -60,17 +61,25 @@
 
   function formatDateChip() {
     var d = new Date();
-    var WD = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
-    var MON = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-    return pad(d.getDate()) + ' · ' + MON[d.getMonth()] + ' · ' + WD[d.getDay()];
+    return WEEKDAY_CN[d.getDay()] + ' · ' + MONTH_EN[d.getMonth()] + ' ' + d.getDate();
   }
 
   function formatDiaryDate(iso) {
     var parts = String(iso || '').split('-').map(Number);
     if (parts.length < 3) return iso || '';
-    var WD = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
     var d = new Date(parts[0], parts[1] - 1, parts[2]);
-    return parts[0] + '.' + pad(parts[1]) + '.' + pad(parts[2]) + ' ' + WD[d.getDay()];
+    return parts[0] + '.' + pad(parts[1]) + '.' + pad(parts[2]) + '  ' + WEEKDAY_CN[d.getDay()];
+  }
+
+  function diaryMetaParts(iso) {
+    var parts = String(iso || '').split('-').map(Number);
+    if (parts.length < 3) return { day: '—', mon: '—', wd: '—' };
+    var d = new Date(parts[0], parts[1] - 1, parts[2]);
+    return {
+      day: pad(parts[2]),
+      mon: pad(parts[1]) + '月',
+      wd: WEEKDAY_CN[d.getDay()]
+    };
   }
 
   function getContact(id) {
@@ -188,7 +197,6 @@
   }
 
   function layoutForIndex(i) { return LAYOUTS[i % LAYOUTS.length]; }
-  function stickerForIndex(i) { return STICKERS[i % STICKERS.length]; }
 
   function renderIndex() {
     var listEl = $('dy-index-list');
@@ -196,7 +204,7 @@
     if (!listEl || !st) return;
     var rows = st.getAllContactRows();
     if (!rows.length) {
-      listEl.innerHTML = '<p class="dy-empty-hint">暂无角色<br>请先添加联系人</p>';
+      listEl.innerHTML = '<p class="dy-empty-hint">暂无角色 · 请先添加联系人</p>';
       return;
     }
     listEl.innerHTML = rows.map(function (contact) {
@@ -208,7 +216,7 @@
             avatarHtml(contact, 'dy-bookmark__ava') +
             '<span class="dy-bookmark__name">' + esc(displayName(contact)) + '</span>' +
           '</span>' +
-          '<span class="dy-bookmark__count">' + count + ' 篇</span>' +
+          '<span class="dy-bookmark__count">' + count + 'p</span>' +
         '</button>'
       );
     }).join('');
@@ -227,20 +235,21 @@
     var contact = getContact(state.selectedContactId);
     if (!contact) {
       if (heroName) heroName.textContent = '选一位角色';
-      if (heroSub) heroSub.textContent = '翻开ta的私人手帐';
+      if (heroSub) heroSub.textContent = '从下方滑动选择';
       if (heroAva) heroAva.innerHTML = '<span class="dy-hero__ava dy-hero__ava--ph">?</span>';
-      if (heroSticker) heroSticker.textContent = '✿';
+      if (heroSticker) heroSticker.textContent = 'entries';
       shelfEl.innerHTML =
         '<div class="dy-empty">' +
-          '<p>从左侧书签选一位角色<br>查看或生成 ta 的日记</p>' +
-          '<em>private pages</em>' +
+          '<p>先选一位角色<br>再写下或生成今日日记</p>' +
+          '<em>pick someone</em>' +
         '</div>';
       return;
     }
 
+    var count = st.getContactDiaries(contact.id).length;
     if (heroName) heroName.textContent = displayName(contact);
-    if (heroSub) heroSub.textContent = '私人手帐 · ' + st.getContactDiaries(contact.id).length + ' 篇留存';
-    if (heroSticker) heroSticker.textContent = stickerForIndex(contact.name.length);
+    if (heroSub) heroSub.textContent = count ? ('已留下 ' + count + ' 篇') : '还没有日记';
+    if (heroSticker) heroSticker.textContent = count + ' entries';
     if (heroAva) {
       heroAva.innerHTML = avatarHtml(contact, 'dy-hero__ava');
       resolveAvatarUrl(contact).then(function (url) {
@@ -253,8 +262,8 @@
     if (!diaries.length) {
       shelfEl.innerHTML =
         '<div class="dy-empty">' +
-          '<p>还没有日记呢<br>点击右上角 ✦ 星号<br>让 ta 写下今日心情</p>' +
-          '<em>tap the star</em>' +
+          '<p>空白的一页<br>点「写今日」或底部 ＋</p>' +
+          '<em>new page</em>' +
         '</div>';
       return;
     }
@@ -264,32 +273,43 @@
     }).join('');
   }
 
-  function renderCharDiaryCard(row, i) {
+  function renderDiaryCard(row, i, readAttr) {
     row = repairDiaryRow(row);
     var layout = layoutForIndex(i);
-    var moodHtml = row.mood
-      ? '<span class="dy-page__mood">' + esc(row.mood) + '</span>'
+    var mood = row.mood || (readAttr === 'data-dy-user-read' ? '我的' : '日记');
+    var words = row.wordCount || String(row.content || '').replace(/\s/g, '').length;
+    var meta = diaryMetaParts(row.dateIso);
+    var notchHtml = layout === 'a'
+      ? '<span class="dy-page__notch dy-page__notch--l" aria-hidden="true"></span>' +
+        '<span class="dy-page__notch dy-page__notch--r" aria-hidden="true"></span>'
       : '';
-    var clipHtml = i % 2 === 0 ? '<span class="dy-page__deco dy-page__deco--clip" aria-hidden="true"></span>' : '';
     return (
-      '<button type="button" class="dy-card" data-dy-read="' + esc(row.id) + '">' +
+      '<button type="button" class="dy-card" ' + readAttr + '="' + esc(row.id) + '">' +
         '<article class="dy-page dy-page--' + layout + '">' +
-          '<span class="dy-page__tape" aria-hidden="true"></span>' +
-          clipHtml +
+          '<span class="dy-page__ribbon" aria-hidden="true"></span>' +
+          notchHtml +
           '<header class="dy-page__head">' +
             '<span class="dy-page__date">' + esc(formatDiaryDate(row.dateIso)) + '</span>' +
-            moodHtml +
+            '<span class="dy-page__mood">' + esc(mood) + '</span>' +
           '</header>' +
           '<h3 class="dy-page__title">' + esc(row.title) + '</h3>' +
-          '<p class="dy-page__excerpt">' + esc(excerpt(row.content, 160)) + '</p>' +
+          '<div class="dy-page__meta" aria-hidden="true">' +
+            '<div class="dy-page__meta-item"><span class="dy-page__meta-label">Day</span><span class="dy-page__meta-val">' + esc(meta.day) + '</span></div>' +
+            '<div class="dy-page__meta-item"><span class="dy-page__meta-label">Month</span><span class="dy-page__meta-val">' + esc(meta.mon) + '</span></div>' +
+            '<div class="dy-page__meta-item"><span class="dy-page__meta-label">Words</span><span class="dy-page__meta-val">' + words + '</span></div>' +
+          '</div>' +
+          '<p class="dy-page__excerpt">' + esc(excerpt(row.content, 140)) + '</p>' +
           '<footer class="dy-page__foot">' +
-            '<span>' + (row.wordCount || String(row.content || '').replace(/\s/g, '').length) + ' 字</span>' +
-            '<span>展开 →</span>' +
+            '<span class="dy-page__cursive">' + esc(String(mood).slice(0, 12) || 'noted') + '</span>' +
+            '<span class="dy-page__open">阅读</span>' +
           '</footer>' +
-          '<span class="dy-page__deco dy-page__deco--star" aria-hidden="true">' + stickerForIndex(i) + '</span>' +
         '</article>' +
       '</button>'
     );
+  }
+
+  function renderCharDiaryCard(row, i) {
+    return renderDiaryCard(row, i, 'data-dy-read');
   }
 
   function renderUserMaskChips() {
@@ -331,14 +351,14 @@
       if (heroAva) heroAva.innerHTML = '<span class="dy-hero__ava dy-hero__ava--ph">我</span>';
       shelfEl.innerHTML =
         '<div class="dy-empty">' +
-          '<p>从上方选一面具<br>开始写只属于这个身份的心事</p>' +
-          '<em>my secret pages</em>' +
+          '<p>从上方选一面具<br>开始写下心事</p>' +
+          '<em>my pages</em>' +
         '</div>';
       return;
     }
 
     if (heroName) heroName.textContent = profileDisplayName(profile);
-    if (heroSub) heroSub.textContent = '我的日记 · ' + st.getUserDiaries(profile.id).length + ' 篇';
+    if (heroSub) heroSub.textContent = st.getUserDiaries(profile.id).length + ' 篇日记';
     if (heroAva) {
       heroAva.innerHTML = profileAvatarHtml(profile, 'dy-hero__ava');
       resolveProfileAvatarUrl(profile).then(function (url) {
@@ -351,7 +371,7 @@
     if (!diaries.length) {
       shelfEl.innerHTML =
         '<div class="dy-empty">' +
-          '<p>这个面具还没有日记<br>点右上角「＋ 写」<br>记下今天的心情</p>' +
+          '<p>这个面具还没有日记<br>点右上角「＋ 写」</p>' +
           '<em>start writing</em>' +
         '</div>';
       return;
@@ -363,26 +383,7 @@
   }
 
   function renderUserDiaryCard(row, i) {
-    var layout = layoutForIndex(i);
-    var clipHtml = i % 2 === 0 ? '<span class="dy-page__deco dy-page__deco--clip" aria-hidden="true"></span>' : '';
-    return (
-      '<button type="button" class="dy-card" data-dy-user-read="' + esc(row.id) + '">' +
-        '<article class="dy-page dy-page--' + layout + '">' +
-          '<span class="dy-page__tape" aria-hidden="true"></span>' +
-          clipHtml +
-          '<header class="dy-page__head">' +
-            '<span class="dy-page__date">' + esc(formatDiaryDate(row.dateIso)) + '</span>' +
-          '</header>' +
-          '<h3 class="dy-page__title">' + esc(row.title) + '</h3>' +
-          '<p class="dy-page__excerpt">' + esc(excerpt(row.content, 160)) + '</p>' +
-          '<footer class="dy-page__foot">' +
-            '<span>' + (row.wordCount || String(row.content || '').replace(/\s/g, '').length) + ' 字</span>' +
-            '<span>展开 →</span>' +
-          '</footer>' +
-          '<span class="dy-page__deco dy-page__deco--star" aria-hidden="true">' + stickerForIndex(i) + '</span>' +
-        '</article>' +
-      '</button>'
-    );
+    return renderDiaryCard(row, i, 'data-dy-user-read');
   }
 
   function setReaderFootVisible(visible) {
@@ -436,7 +437,7 @@
     var wcEl = $('dy-reader-wc');
     var actsEl = $('dy-reader-acts');
 
-    if (modeTitle) modeTitle.textContent = kind === 'user' ? '我的日记' : '日记正文';
+    if (modeTitle) modeTitle.textContent = kind === 'user' ? '我的日记' : '正文';
     if (titleEl) titleEl.textContent = row.title || '日记';
     if (dateEl) dateEl.textContent = formatDiaryDate(row.dateIso);
     if (moodEl) {
@@ -487,14 +488,14 @@
         setReaderFootVisible(true);
         setReaderTools('', false);
         if (actsEl) {
-          actsEl.innerHTML = '<button type="button" class="dy-reader__del" id="dy-reader-del">撕下这一页</button>';
+          actsEl.innerHTML = '<button type="button" class="dy-reader__del" id="dy-reader-del">删除</button>';
         }
       }
     }
 
     if (wcEl) {
       var wc = row.wordCount || String(row.content || '').replace(/\s/g, '').length;
-      wcEl.textContent = wc + ' 字 · ' + (kind === 'user' ? '我的留存' : '留存于手帐本');
+      wcEl.textContent = wc + ' words';
     }
     reader.classList.add('is-open');
     bindReaderDynamicActions(kind);
@@ -747,9 +748,11 @@
     var el = $('dy-loading');
     var tx = $('dy-loading-text');
     var star = $('dy-gen-star');
+    var dock = $('dy-dock-gen');
     if (el) el.hidden = !on;
     if (tx && text) tx.textContent = text;
     if (star) star.classList.toggle('is-busy', !!on);
+    if (dock) dock.classList.toggle('is-busy', !!on);
     state.generating = !!on;
   }
 
@@ -793,7 +796,7 @@
   function doGenerate(contact) {
     var br = bridge();
     if (!br || state.generating) return;
-    setLoading(true, '正在翻阅记忆、提笔写日记…');
+    setLoading(true, '正在写日记…');
     br.generateTodayDiary(contact).then(function (row) {
       toast('「' + displayName(contact) + '」的今日日记写好了');
       renderAll();
@@ -816,14 +819,14 @@
       st.removeDiary(state.selectedContactId, state.readingDiaryId);
       closeReader();
       renderAll();
-      toast('已撕下这一页');
+      toast('已删除');
     };
     if (global.miyaDialog && global.miyaDialog.confirm) {
       global.miyaDialog.confirm({
-        title: '撕下这一页',
-        message: '删除后无法恢复，确定要撕掉这篇日记吗？',
-        confirmText: '撕掉',
-        cancelText: '留着'
+        title: '删除日记',
+        message: '删除后无法恢复，确定吗？',
+        confirmText: '删除',
+        cancelText: '取消'
       }).then(function (ok) {
         if (ok) run();
       });
@@ -861,6 +864,15 @@
 
     var star = $('dy-gen-star');
     if (star) star.addEventListener('click', generateDiary);
+
+    var promptGen = $('dy-prompt-gen');
+    if (promptGen) promptGen.addEventListener('click', generateDiary);
+
+    var dockGen = $('dy-dock-gen');
+    if (dockGen) dockGen.addEventListener('click', generateDiary);
+
+    var dockSettings = $('dy-dock-settings');
+    if (dockSettings) dockSettings.addEventListener('click', openSettings);
 
     var userEntry = $('dy-user-entry');
     if (userEntry) userEntry.addEventListener('click', openUserPage);

@@ -2712,6 +2712,7 @@
         if (m.type === 'group_red_packet' && m.groupRedPacket) return { kind: 'group_red_packet', msg: m };
         if (m.type === 'love_poem' && m.lovePoem) return { kind: 'love_poem', msg: m };
         if (m.type === 'match_record' && m.matchRecord) return { kind: 'match_record', msg: m };
+        if (m.type === 'sayguess_record' && m.sayguessRecord) return { kind: 'sayguess_record', msg: m };
         if (m.type === 'voice') {
             return {
                 kind: 'voice',
@@ -3232,6 +3233,15 @@
             else if (lines.length) lines.push('[赛事记录]');
             return lines.length ? lines.join('\n') : '[赛事记录]';
         }
+        if (m.type === 'sayguess_record' || (m.sayguessRecord && typeof m.sayguessRecord === 'object')) {
+            var sgDigest = trim(m.content);
+            if (!sgDigest && m.sayguessRecord) {
+                sgDigest = '[你说我猜] ' + trim(m.sayguessRecord.bankName || '');
+            }
+            if (sgDigest) lines.push(sgDigest);
+            else if (lines.length) lines.push('[你说我猜]');
+            return lines.length ? lines.join('\n') : '[你说我猜]';
+        }
         var tajiePostApi = pickTajiePostShare(m);
         if (tajiePostApi) {
             lines.push('【TA界帖子分享】用户从 TA界 转发了以下帖子，请结合正文与热评理解其分享意图');
@@ -3331,6 +3341,8 @@
             body = formatLovePoemForApi(resolveLovePoemFromMessage(m)) || '[情诗]';
         } else if (payload.kind === 'match_record') {
             body = trim(m.content) || '[赛事记录]';
+        } else if (payload.kind === 'sayguess_record') {
+            body = trim(m.content) || '[你说我猜]';
         } else if (payload.kind === 'tajiePostShare') {
             var tajiePostBody = payload.share || pickTajiePostShare(m) || {};
             body =

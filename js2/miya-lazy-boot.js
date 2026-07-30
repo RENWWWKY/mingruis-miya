@@ -127,10 +127,10 @@
       ]
     },
     diaryUi: {
-      css: ['css/miya-diary.css?v=9'],
+      css: ['css/miya-diary.css?v=13'],
       js: [
         'js2/miya-diary-scheduler.js?v=3',
-        'js2/miya-diary-app.js?v=8'
+        'js2/miya-diary-app.js?v=10'
       ]
     },
     theaterUi: {
@@ -167,6 +167,16 @@
         'js2/miya-match-bridge.js?v=4',
         'js2/miya-match-app.js?v=5'
       ]
+    },
+    funUi: {
+      css: ['css/miya-fun.css?v=3', 'css/miya-fun-sayguess.css?v=5'],
+      js: [
+        'js2/miya-forum-bridge.js?v=17',
+        'js2/miya-fun-sayguess-store.js?v=3',
+        'js2/miya-fun-sayguess-bridge.js?v=5',
+        'js2/miya-fun-sayguess-app.js?v=8',
+        'js2/miya-fun-app.js?v=2'
+      ]
     }
   };
 
@@ -181,7 +191,8 @@
     weather: ['weatherUi'],
     cstore: ['cstoreUi'],
     memory: ['memoryUi'],
-    match: ['matchUi']
+    match: ['matchUi'],
+    fun: ['funUi']
   };
 
   var loadedCss = Object.create(null);

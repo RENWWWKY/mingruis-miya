@@ -1755,6 +1755,11 @@
       if (m.matchRecord.eventItemName) mrPrev += ' · ' + m.matchRecord.eventItemName;
       return '[赛事记录] ' + mrPrev;
     }
+    if (m.type === 'sayguess_record' && m.sayguessRecord) {
+      var sgPrev = '你说我猜';
+      if (m.sayguessRecord.bankName) sgPrev += ' · ' + m.sayguessRecord.bankName;
+      return '[你说我猜] ' + sgPrev;
+    }
     var raw = stripApiTimePrefix(m.voiceText || m.content);
     if (m.role === 'assistant') raw = stripThinkingForDisplay(raw);
     return raw;
@@ -2319,6 +2324,106 @@
     '</div>';
   }
 
+  function renderSayGuessRecordCard(m) {
+    try {
+      return renderSayGuessRecordCardInner(m);
+    } catch (err) {
+      console.warn('[miyaChatRoom] sayguess record card render failed', err);
+      var fallback = String((m && m.content) || '').trim() || '[你说我猜]';
+      return '<div class="qq-card qq-card-sayguess" data-msg-id="' + esc(m && m.id) + '">' +
+        '<div class="qq-card-sayguess__body"><div class="qq-card-sayguess__title">你说我猜</div>' +
+        '<div class="qq-card-sayguess__hl">' + esc(fallback.slice(0, 240)) + '</div></div></div>';
+    }
+  }
+
+  function renderSayGuessRecordCardInner(m) {
+    var sg = m.sayguessRecord && typeof m.sayguessRecord === 'object' ? m.sayguessRecord : {};
+    var modeLabel = sg.mode === 'other_lead' ? '你们说我猜' : '我说你们猜';
+    var winner = Array.isArray(sg.rankings) && sg.rankings[0] ? sg.rankings[0] : null;
+    var rankLines = Array.isArray(sg.rankings)
+      ? sg.rankings.map(function (r) {
+          var prize = '';
+          if (r.rank === 1 && sg.prizes && sg.prizes.first) prize = sg.prizes.first;
+          if (r.rank === 2 && sg.prizes && sg.prizes.second) prize = sg.prizes.second;
+          if (r.rank === 3 && sg.prizes && sg.prizes.third) prize = sg.prizes.third;
+          return '第' + r.rank + '名 · ' + (r.name || '玩家') + ' · ' + (r.score || 0) + '分' +
+            (prize ? ' · ' + prize : '');
+        })
+      : [];
+    var roundsHtml = (Array.isArray(sg.rounds) ? sg.rounds : []).map(function (r, i) {
+      var describer = (sg.players || []).find(function (p) {
+        return String(p.id) === String(r.describerId);
+      });
+      var parts = [];
+      parts.push('<div class="qq-card-sayguess__round">');
+      parts.push('<div class="qq-card-sayguess__round-no">第 ' + (i + 1) + ' 轮</div>');
+      parts.push('<div class="qq-card-sayguess__meta">出题 · ' + esc((describer && describer.name) || '—') +
+        '　答案 · <b>' + esc(r.word || '') + '</b></div>');
+      if (r.description) {
+        parts.push('<div class="qq-card-sayguess__desc">' + esc(r.description) + '</div>');
+      }
+      (Array.isArray(r.dialogue) ? r.dialogue : []).forEach(function (ln) {
+        parts.push('<div class="qq-card-sayguess__line"><strong>' + esc(ln.name || '') + '</strong>' +
+          '<p>' + esc(ln.speech || '') + '</p>' +
+          (ln.guess ? '<span class="qq-card-sayguess__guess">' + esc(ln.guess) + '</span>' : '') +
+          '</div>');
+      });
+      if (!(r.dialogue || []).length) {
+        (Array.isArray(r.guesses) ? r.guesses : []).forEach(function (g) {
+          var who = (sg.players || []).find(function (p) {
+            return String(p.id) === String(g.playerId);
+          });
+          parts.push('<div class="qq-card-sayguess__line"><strong>' + esc((who && who.name) || '?') + '</strong>' +
+            (g.speech && g.speech !== g.text ? '<p>' + esc(g.speech) + '</p>' : '') +
+            '<span class="qq-card-sayguess__guess">' + esc(g.text || '') + '</span>' +
+            (g.hit ? '<em>+1</em>' : '') +
+            '</div>');
+        });
+      }
+      if (Array.isArray(r.review) && r.review.length) {
+        parts.push('<div class="qq-card-sayguess__meta">揭晓讨论</div>');
+        r.review.forEach(function (ln) {
+          parts.push('<div class="qq-card-sayguess__line"><strong>' + esc(ln.name || '') + '</strong>' +
+            '<p>' + esc(ln.speech || '') + '</p></div>');
+        });
+      }
+      parts.push('</div>');
+      return parts.join('');
+    }).join('');
+    var reactionsHtml = '';
+    if (Array.isArray(sg.reactions) && sg.reactions.length) {
+      reactionsHtml = '<div class="qq-card-sayguess__rx">' +
+        sg.reactions.map(function (rx) {
+          return '<div><strong>' + esc(rx.name || '') + '</strong><p>' + esc(rx.text || '') + '</p></div>';
+        }).join('') + '</div>';
+    }
+    return '<div class="qq-card qq-card-sayguess" data-msg-id="' + esc(m.id) + '" data-sg-expand>' +
+      '<header class="qq-card-sayguess__head">' +
+        '<span class="qq-card-sayguess__kicker">Say · 你说我猜</span>' +
+        '<span class="qq-card-sayguess__mode">' + esc(modeLabel) + '</span>' +
+      '</header>' +
+      '<div class="qq-card-sayguess__body">' +
+        '<div class="qq-card-sayguess__title">' + esc(sg.bankName || '你说我猜') + '</div>' +
+        (winner
+          ? '<div class="qq-card-sayguess__hl">' + esc(winner.name) + ' 赢了 · ' + (winner.score || 0) + ' 分</div>'
+          : '') +
+        (rankLines.length
+          ? '<ul class="qq-card-sayguess__ranks">' + rankLines.map(function (l) {
+              return '<li>' + esc(l) + '</li>';
+            }).join('') + '</ul>'
+          : '') +
+        '<div class="qq-card-sayguess__detail">' +
+          (roundsHtml ? '<div class="qq-card-sayguess__detail-label">完整对局</div>' + roundsHtml : '') +
+          (reactionsHtml ? '<div class="qq-card-sayguess__detail-label">感想</div>' + reactionsHtml : '') +
+        '</div>' +
+      '</div>' +
+      '<footer class="qq-card-sayguess__foot">' +
+        '<span>点按展开 / 收起</span>' +
+        '<span>' + esc(String(sg.totalRounds || 0)) + ' 轮</span>' +
+      '</footer>' +
+    '</div>';
+  }
+
   function renderLocationCard(m) {
     var card = m.locationCard || {};
     var name = String(card.name || '').trim() || '位置';
@@ -2666,6 +2771,7 @@
     var body = '';
     if (payload.kind === 'transfer' && displayMsg.redPacket) body = renderTransferCard(displayMsg, opts);
     else if (payload.kind === 'match_record' && displayMsg.matchRecord) body = renderMatchRecordCard(displayMsg);
+    else if (payload.kind === 'sayguess_record' && displayMsg.sayguessRecord) body = renderSayGuessRecordCard(displayMsg);
     else if (payload.kind === 'location' && displayMsg.locationCard) body = renderLocationCard(displayMsg);
     else if (payload.kind === 'takeout') {
       var orderUi = global.MiyaChatOrderUi;
@@ -4768,7 +4874,9 @@
     if (document.documentElement.getAttribute('data-miya-match-expand') === '1') return;
     document.documentElement.setAttribute('data-miya-match-expand', '1');
     document.addEventListener('click', function (e) {
-      var card = e.target && e.target.closest ? e.target.closest('.qq-card-match[data-match-expand]') : null;
+      var card = e.target && e.target.closest
+        ? e.target.closest('.qq-card-match[data-match-expand], .qq-card-sayguess[data-sg-expand]')
+        : null;
       if (!card) return;
       card.classList.toggle('is-expanded');
     }, true);

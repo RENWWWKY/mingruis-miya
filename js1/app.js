@@ -3,7 +3,7 @@
   (function resetOverlayApps() {
     document.body.classList.remove('miya-app-open');
     document.querySelectorAll(
-      '.miya-beautify-app, .miya-settings-app, .miya-worldbook-app, .miya-contacts-app, #miya-music-app, #miya-chat-app, #miya-memory-app, #miya-diary-app, #miya-theater-app, #miya-offline-app, #miya-typewriter-app, #miya-forum-app, #miya-cstore-app, #miya-itinerary-app, #miya-couple-app, #miya-deep-app'
+      '.miya-beautify-app, .miya-settings-app, .miya-worldbook-app, .miya-contacts-app, #miya-music-app, #miya-chat-app, #miya-memory-app, #miya-diary-app, #miya-theater-app, #miya-offline-app, #miya-typewriter-app, #miya-forum-app, #miya-cstore-app, #miya-itinerary-app, #miya-couple-app, #miya-deep-app, #miya-fun-app, #miya-fun-sayguess, #miya-match-app'
     ).forEach(function (el) {
       if (!el.classList.contains('is-open')) {
         el.setAttribute('hidden', '');
@@ -412,6 +412,9 @@
     },
     match: function () {
       if (window.miyaMatchApp && window.miyaMatchApp.open) window.miyaMatchApp.open();
+    },
+    fun: function () {
+      if (window.miyaFunApp && window.miyaFunApp.open) window.miyaFunApp.open();
     },
     deep: function () {
       if (window.miyaDeepApp && window.miyaDeepApp.open) window.miyaDeepApp.open();
