@@ -3462,24 +3462,10 @@ function renderWriter() {
                 return global.MiyaOfflineBeautify.whenPresetsReady();
             });
         }
+        /* 封存记录以本地落盘为准；勿每次进入都从线上镜像自动重建。
+         * 手动删除会同步清掉线上镜像；「从线上记忆恢复」仅用于本地丢失且镜像仍在的情况。 */
         hydrate
             .then(function () {
-                if (!st || typeof st.previewChatMirrorRecovery !== 'function') return null;
-                var preview = st.previewChatMirrorRecovery();
-                if (!preview || (!preview.sessions && !preview.messages)) return null;
-                if (typeof st.restoreFromChatMirrors !== 'function') return null;
-                return st.restoreFromChatMirrors();
-            })
-            .then(function (res) {
-                if (res && res.ok) {
-                    toast(
-                        '已从线上记忆恢复 ' +
-                            String(res.sessions || 0) +
-                            ' 卷 · ' +
-                            String(res.messages || 0) +
-                            ' 条消息'
-                    );
-                }
                 render();
                 applyOfflineBeautify();
             })

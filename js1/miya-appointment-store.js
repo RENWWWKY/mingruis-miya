@@ -172,8 +172,39 @@
             savedParamPresets: [],
             beautify: defaultBeautify(),
             statusBar: defaultStatusBar(),
-            byChat: {}
+            byChat: {},
+            /** 用户手动删除的卷宗 id → 删除时间；双保险，防止残留镜像把已删剧情复活 */
+            deletedSessionIds: {}
         };
+    }
+
+    function normalizeDeletedSessionIds(raw) {
+        var out = {};
+        if (!raw || typeof raw !== 'object') return out;
+        Object.keys(raw).forEach(function (k) {
+            var sid = String(k || '').trim();
+            if (!sid) return;
+            var ts = Number(raw[k]);
+            out[sid] = Number.isFinite(ts) && ts > 0 ? ts : Date.now();
+        });
+        return out;
+    }
+
+    function isSessionTombstoned(sessionId) {
+        var sid = String(sessionId || '').trim();
+        if (!sid) return false;
+        var map = (cache && cache.deletedSessionIds) || {};
+        return !!map[sid];
+    }
+
+    function markSessionTombstone(sessionId) {
+        var sid = String(sessionId || '').trim();
+        if (!sid) return;
+        load();
+        if (!cache.deletedSessionIds || typeof cache.deletedSessionIds !== 'object') {
+            cache.deletedSessionIds = {};
+        }
+        cache.deletedSessionIds[sid] = Date.now();
     }
 
     function normalizeOpeningPreset(raw) {
@@ -436,6 +467,69 @@
         });
     }
 
+    function softDeleteChatMirror(st, chatId, mirrorId) {
+        var tid = String(chatId || '').trim();
+        var mid = String(mirrorId || '').trim();
+        if (!st || !tid || !mid || typeof st.updateMessage !== 'function') return;
+        st.updateMessage(tid, mid, { deleted: true, content: '' }).catch(function () {});
+    }
+
+    /** 彻底删除某卷宗在线上的镜像：不再注入 API / 不再被镜像恢复 */
+    function purgeSessionOnlineMirrors(sess) {
+        if (!sess || !sess.id) return;
+        var st = global.miyaChatStore;
+        if (!st) return;
+        var sid = String(sess.id).trim();
+        var primary = String(sess.chatId || '').trim();
+        var touched = Object.create(null);
+
+        function mark(tid, mid) {
+            var t = String(tid || '').trim();
+            var m = String(mid || '').trim();
+            if (!t || !m) return;
+            var key = t + '\0' + m;
+            if (touched[key]) return;
+            touched[key] = true;
+            softDeleteChatMirror(st, t, m);
+        }
+
+        (sess.messages || []).forEach(function (msg) {
+            if (!msg) return;
+            if (msg.chatMirrorId) mark(primary, msg.chatMirrorId);
+            if (msg.castMirrors && typeof msg.castMirrors === 'object') {
+                Object.keys(msg.castMirrors).forEach(function (tid) {
+                    mark(tid, msg.castMirrors[tid]);
+                });
+            }
+        });
+
+        var meta = typeof st.getMeta === 'function' ? st.getMeta() : null;
+        var messagesByChat = meta && meta.messagesByChat;
+        if (!messagesByChat || typeof messagesByChat !== 'object') return;
+        Object.keys(messagesByChat).forEach(function (tid) {
+            var arr = messagesByChat[tid] || [];
+            for (var i = 0; i < arr.length; i++) {
+                var m = arr[i];
+                if (!m || m.deleted || !m.offlineMeet) continue;
+                if (String(m.appointmentSessionId || '').trim() !== sid) continue;
+                mark(tid, m.id);
+            }
+        });
+    }
+
+    function purgeMessageOnlineMirrors(chatId, msg) {
+        if (!msg) return;
+        var st = global.miyaChatStore;
+        if (!st) return;
+        var primary = String(chatId || '').trim();
+        if (msg.chatMirrorId) softDeleteChatMirror(st, primary, msg.chatMirrorId);
+        if (msg.castMirrors && typeof msg.castMirrors === 'object') {
+            Object.keys(msg.castMirrors).forEach(function (tid) {
+                softDeleteChatMirror(st, tid, msg.castMirrors[tid]);
+            });
+        }
+    }
+
     function normalizeSession(raw) {
         if (!raw || typeof raw !== 'object') return null;
         var msgs = Array.isArray(raw.messages) ? raw.messages.map(normalizeMessage).filter(Boolean) : [];
@@ -586,9 +680,58 @@
             d.byChat = parsed.byChat && typeof parsed.byChat === 'object' ? parsed.byChat : {};
             d.beautify = normalizeBeautify(parsed.beautify);
             d.statusBar = normalizeStatusBar(parsed.statusBar);
+            d.deletedSessionIds = normalizeDeletedSessionIds(parsed.deletedSessionIds);
         }
         d.byChat = finalizeByChat(d.byChat);
         return { state: d, presetDirty: presetDirty };
+    }
+
+    function filterTombstonedRecoveredByChat(byChat, tombstoneMap) {
+        var tombs = tombstoneMap && typeof tombstoneMap === 'object' ? tombstoneMap : {};
+        var out = {};
+        var sessionCount = 0;
+        var messageCount = 0;
+        Object.keys(byChat || {}).forEach(function (chatId) {
+            var src = byChat[chatId];
+            if (!src || !Array.isArray(src.sessions)) return;
+            var kept = src.sessions.filter(function (sess) {
+                if (!sess || !sess.id) return false;
+                if (tombs[String(sess.id)]) return false;
+                return countLiveMessages(sess) > 0;
+            });
+            if (!kept.length) return;
+            out[chatId] = {
+                sessions: kept,
+                activeSessionId: String(src.activeSessionId || '').trim()
+            };
+            kept.forEach(function (sess) {
+                sessionCount += 1;
+                messageCount += countLiveMessages(sess);
+            });
+        });
+        if (!sessionCount) return null;
+        return { byChat: out, sessionCount: sessionCount, messageCount: messageCount };
+    }
+
+    function currentTombstoneMap() {
+        if (cache && cache.deletedSessionIds && typeof cache.deletedSessionIds === 'object') {
+            return cache.deletedSessionIds;
+        }
+        return {};
+    }
+
+    function richestDiskTombstones(candidates) {
+        var map = {};
+        (candidates || []).forEach(function (row) {
+            if (!row || typeof row !== 'object' || row.__fromMirror) return;
+            var ids = normalizeDeletedSessionIds(row.deletedSessionIds);
+            Object.keys(ids).forEach(function (sid) {
+                var prev = Number(map[sid]) || 0;
+                var next = Number(ids[sid]) || 0;
+                if (next >= prev) map[sid] = next;
+            });
+        });
+        return map;
     }
 
     function buildSessionFromMirrorMsgs(chatId, contactId, sessionId, msgs) {
@@ -627,12 +770,19 @@
         });
     }
 
-    function recoverSessionsFromChatMirrors() {
+    function recoverSessionsFromChatMirrors(tombstoneOverride) {
         var st = global.miyaChatStore;
         if (!st || typeof st.getMeta !== 'function') return null;
         var meta = st.getMeta();
         var messagesByChat = meta && meta.messagesByChat;
         if (!messagesByChat || typeof messagesByChat !== 'object') return null;
+        try {
+            load();
+        } catch (e) {}
+        var tombs =
+            tombstoneOverride && typeof tombstoneOverride === 'object'
+                ? tombstoneOverride
+                : currentTombstoneMap();
         var mem = global.MiyaAppointmentMemory;
         var byChat = {};
         var sessionCount = 0;
@@ -701,6 +851,7 @@
             if (!sessions.length) return;
             if (!byChat[chatId]) byChat[chatId] = { sessions: [], activeSessionId: '' };
             sessions.forEach(function (sess) {
+                if (!sess || !sess.id || tombs[String(sess.id)]) return;
                 byChat[chatId].sessions.push(sess);
                 sessionCount += 1;
                 messageCount += countLiveMessages(sess);
@@ -722,6 +873,7 @@
             src.sessions.forEach(function (sess) {
                 var norm = normalizeSession(Object.assign({}, sess, { chatId: chatId }));
                 if (!norm || countLiveMessages(norm) <= 0) return;
+                if (isSessionTombstoned(norm.id)) return;
                 var bucket = cache.byChat && cache.byChat[chatId];
                 var existing =
                     bucket && Array.isArray(bucket.sessions)
@@ -767,6 +919,7 @@
             src.sessions.forEach(function (sess) {
                 var norm = normalizeSession(Object.assign({}, sess, { chatId: chatId }));
                 if (!norm || countLiveMessages(norm) <= 0) return;
+                if (isSessionTombstoned(norm.id)) return;
                 var idx = bucket.sessions.findIndex(function (s) {
                     return s && s.id === norm.id;
                 });
@@ -818,26 +971,35 @@
         return countPendingMirrorRecovery(pack.byChat);
     }
 
+    function mirrorHydrationCandidate(recovered, tombstones) {
+        if (!recovered || !recovered.byChat) return null;
+        var filtered = filterTombstonedRecoveredByChat(recovered.byChat, tombstones);
+        if (!filtered || !filtered.byChat) return null;
+        return {
+            version: 1,
+            presets: [defaultBuiltinPreset()],
+            contactPresetId: {},
+            contactParams: {},
+            contactWorldbook: {},
+            contactOpeningPresets: {},
+            savedParamPresets: [],
+            beautify: defaultBeautify(),
+            byChat: filtered.byChat,
+            deletedSessionIds: normalizeDeletedSessionIds(tombstones),
+            __fromMirror: true,
+            __mirrorSessions: filtered.sessionCount
+        };
+    }
+
     function collectHydrationCandidates() {
         var read = global.miyaReadLsJsonKey;
         if (typeof read !== 'function') {
-            var recoveredOnly = recoverSessionsFromChatMirrors();
+            var tombs0 = currentTombstoneMap();
+            var recoveredOnly = recoverSessionsFromChatMirrors(tombs0);
+            var onlyCand = mirrorHydrationCandidate(recoveredOnly, tombs0);
             return Promise.resolve({
-                candidates: recoveredOnly && recoveredOnly.byChat
-                    ? [{
-                        version: 1,
-                        presets: [defaultBuiltinPreset()],
-                        contactPresetId: {},
-                        contactParams: {},
-                        contactWorldbook: {},
-                        contactOpeningPresets: {},
-                        savedParamPresets: [],
-                        beautify: defaultBeautify(),
-                        byChat: recoveredOnly.byChat,
-                        __fromMirror: true
-                    }]
-                    : [],
-                mirrorSessions: recoveredOnly ? recoveredOnly.sessionCount : 0
+                candidates: onlyCand ? [onlyCand] : [],
+                mirrorSessions: onlyCand ? onlyCand.__mirrorSessions : 0
             });
         }
         return Promise.all([
@@ -851,41 +1013,20 @@
                 if (row && typeof row === 'object') out.push(row);
             });
             var diskScore = sessionDataRichness(pickRichestParsed(out));
-            var recovered = recoverSessionsFromChatMirrors();
-            var mirrorSessions = recovered ? recovered.sessionCount : 0;
-            if (recovered && recovered.byChat && mirrorSessions > 0 && diskScore === 0) {
-                out.push({
-                    version: 1,
-                    presets: [defaultBuiltinPreset()],
-                    contactPresetId: {},
-                    contactParams: {},
-                    contactWorldbook: {},
-                    contactOpeningPresets: {},
-                    savedParamPresets: [],
-                    beautify: defaultBeautify(),
-                    byChat: recovered.byChat,
-                    __fromMirror: true
-                });
-            }
+            var tombs = richestDiskTombstones(out);
+            if (!Object.keys(tombs).length) tombs = currentTombstoneMap();
+            var recovered = recoverSessionsFromChatMirrors(tombs);
+            var mirrorCand = diskScore === 0 ? mirrorHydrationCandidate(recovered, tombs) : null;
+            var mirrorSessions = mirrorCand ? mirrorCand.__mirrorSessions : 0;
+            if (mirrorCand) out.push(mirrorCand);
             return { candidates: out, mirrorSessions: mirrorSessions };
         }).catch(function () {
-            var recovered = recoverSessionsFromChatMirrors();
+            var tombs = currentTombstoneMap();
+            var recovered = recoverSessionsFromChatMirrors(tombs);
+            var cand = mirrorHydrationCandidate(recovered, tombs);
             return {
-                candidates: recovered && recovered.byChat
-                    ? [{
-                        version: 1,
-                        presets: [defaultBuiltinPreset()],
-                        contactPresetId: {},
-                        contactParams: {},
-                        contactWorldbook: {},
-                        contactOpeningPresets: {},
-                        savedParamPresets: [],
-                        beautify: defaultBeautify(),
-                        byChat: recovered.byChat,
-                        __fromMirror: true
-                    }]
-                    : [],
-                mirrorSessions: recovered ? recovered.sessionCount : 0
+                candidates: cand ? [cand] : [],
+                mirrorSessions: cand ? cand.__mirrorSessions : 0
             };
         });
     }
@@ -913,6 +1054,43 @@
         return cache;
     }
 
+    /** 合并各候选墓碑，并从 byChat 剔除已删卷宗，避免旧备份把手动删除的剧情加回来 */
+    function applyTombstonesToParsed(parsed, candidates) {
+        if (!parsed || typeof parsed !== 'object') return parsed;
+        var tombs = richestDiskTombstones(candidates);
+        var selfTombs = normalizeDeletedSessionIds(parsed.deletedSessionIds);
+        Object.keys(selfTombs).forEach(function (sid) {
+            var prev = Number(tombs[sid]) || 0;
+            var next = Number(selfTombs[sid]) || 0;
+            if (next >= prev) tombs[sid] = next;
+        });
+        if (cache && cache.deletedSessionIds) {
+            var live = normalizeDeletedSessionIds(cache.deletedSessionIds);
+            Object.keys(live).forEach(function (sid) {
+                var prev = Number(tombs[sid]) || 0;
+                var next = Number(live[sid]) || 0;
+                if (next >= prev) tombs[sid] = next;
+            });
+        }
+        if (!Object.keys(tombs).length) return parsed;
+        var next = Object.assign({}, parsed, { deletedSessionIds: tombs });
+        if (next.byChat && typeof next.byChat === 'object') {
+            var byChat = {};
+            Object.keys(next.byChat).forEach(function (chatId) {
+                var row = next.byChat[chatId];
+                if (!row || typeof row !== 'object') return;
+                var sessions = Array.isArray(row.sessions)
+                    ? row.sessions.filter(function (s) {
+                          return s && s.id && !tombs[String(s.id)];
+                      })
+                    : [];
+                byChat[chatId] = Object.assign({}, row, { sessions: sessions });
+            });
+            next.byChat = byChat;
+        }
+        return next;
+    }
+
     function ensureHydrated() {
         if (_hydrated) return Promise.resolve(cache || load());
         if (_hydratePromise) return _hydratePromise;
@@ -927,13 +1105,30 @@
             .then(function (pack) {
                 var candidates = pack && pack.candidates ? pack.candidates : [];
                 var mirrorSessions = pack && pack.mirrorSessions ? pack.mirrorSessions : 0;
-                var best = pickRichestParsed(candidates);
+                var best = applyTombstonesToParsed(pickRichestParsed(candidates), candidates);
                 var currentScore = cache ? stateRichness(cache) : 0;
                 var bestScore = stateRichness(best);
                 if (best && bestScore >= currentScore) {
                     applyParsedState(best, { skipSave: true });
                 } else if (!cache) {
                     applyParsedState(null, { skipSave: true });
+                } else if (cache) {
+                    /* 即便未采用更富候选，也要保留已收集的墓碑 */
+                    var tombs = richestDiskTombstones(candidates);
+                    if (Object.keys(tombs).length) {
+                        cache.deletedSessionIds = Object.assign(
+                            {},
+                            normalizeDeletedSessionIds(cache.deletedSessionIds),
+                            tombs
+                        );
+                        Object.keys(cache.byChat || {}).forEach(function (chatId) {
+                            var bucket = cache.byChat[chatId];
+                            if (!bucket || !Array.isArray(bucket.sessions)) return;
+                            bucket.sessions = bucket.sessions.filter(function (s) {
+                                return s && s.id && !cache.deletedSessionIds[String(s.id)];
+                            });
+                        });
+                    }
                 }
                 _hydrated = true;
                 _hydratePromise = null;
@@ -1483,11 +1678,7 @@
             var sess = store.getSession(chatId, sessionId);
             if (!sess) return null;
             var row = (sess.messages || []).find(function (m) { return m.id === messageId; });
-            if (row && row.chatMirrorId && global.miyaChatStore && global.miyaChatStore.updateMessage) {
-                global.miyaChatStore
-                    .updateMessage(chatId, row.chatMirrorId, { deleted: true, content: '' })
-                    .catch(function () {});
-            }
+            if (row) purgeMessageOnlineMirrors(chatId, row);
             return store.updateMessage(chatId, sessionId, messageId, { deleted: true, content: '' });
         },
         syncAllSessionsToChat: function (chatId, contactId) {
@@ -1630,10 +1821,23 @@
         },
         lastSummaryEnd: lastSummaryEnd,
         deleteSession: function (chatId, sessionId) {
-            var b = chatBucket(chatId);
-            if (!b) return;
-            b.sessions = b.sessions.filter(function (s) { return s.id !== sessionId; });
-            if (b.activeSessionId === sessionId) b.activeSessionId = '';
+            var sid = String(sessionId || '').trim();
+            if (!sid) return;
+            var sess = store.getSession(chatId, sid);
+            if (!sess) {
+                /* 宿主桶找不到时仍按 id 扫全库镜像，避免多人/迁移残留 */
+                sess = { id: sid, chatId: chatId, messages: [] };
+            }
+            /* 彻底删除：线下卷宗 + 线上镜像一并清掉，不再注入上下文 */
+            purgeSessionOnlineMirrors(sess);
+            load();
+            Object.keys(cache.byChat || {}).forEach(function (key) {
+                var bucket = cache.byChat[key];
+                if (!bucket || !Array.isArray(bucket.sessions)) return;
+                bucket.sessions = bucket.sessions.filter(function (s) { return !s || s.id !== sid; });
+                if (bucket.activeSessionId === sid) bucket.activeSessionId = '';
+            });
+            markSessionTombstone(sid);
             save();
         },
         setActiveSession: function (chatId, sessionId) {
